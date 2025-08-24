@@ -1,211 +1,391 @@
 (() => {
-  // ---------- helpers ----------
   const $ = s => document.querySelector(s);
-  const el = (t,c,attrs={}) => { const n=document.createElement(t); if(c) n.className=c; for(const[k,v] of Object.entries(attrs)) n.setAttribute(k,v); return n; };
+  const el = (t, c, attrs = {}) => {
+    const n = document.createElement(t);
+    if (c) n.className = c;
+    for (const [k, v] of Object.entries(attrs)) n.setAttribute(k, v);
+    return n;
+  };
 
-  const COLORS = ["#ff4757", "#1e90ff"]; // P1 red, P2 blue
+  const defaultColors = ["#ff4757", "#1e90ff", "#2ed573", "#ecc668", "#FFA500", "#800080"];
 
-  // ---------- state ----------
-  let rows=6, cols=9;
-  let current=0;                 // 0 -> P1, 1 -> P2
-  let board=[];                  // {owner:-1|0|1, count:int}
-  let playing=true;
-  let firstMove=[false,false];   // guard: don't win before both moved
+  let rows = 9, cols = 9;
+  let players = [];
+  let current = 0, board = [], playing = true, firstMove = [], history = [];
+  let scores = [];
 
-  // ---------- DOM ----------
-  const boardEl=$("#board"), statusText=$("#statusText"), turnBadge=$("#turnBadge"),
-        gridSelect=$("#gridSelect"), newBtn=$("#newGameBtn");
+  const boardEl = $("#board"),
+    statusText = $("#statusText"),
+    turnBadge = $("#turnBadge"),
+    gridSelect = $("#gridSelect"),
+    newBtn = $("#newGameBtn"),
+    undoBtn = $("#undoBtn"),
+    playerCountSelect = $("#playerCountSelect"),
+    playerSettingsContainer = $("#playerSettingsContainer"),
+    modeSelect = document.getElementById("gameModeSelect"),
+    timerDisplay = document.getElementById("timerDisplay"),
+    timeLeftSpan = document.getElementById("timeLeft"),
+    timerSelect = document.getElementById("timerSelect"),
+    timerLabel = document.getElementById("timerLabel"),
+    scoreDisplay = document.getElementById("scoreDisplay");
 
-  // ---------- init ----------
-  function init(){
-    gridSelect.value="9x6";
-    bindUI();
-    setupBoard(cols,rows);
-    updateStatus("Player 1 starts.");
+  let mode = "normal";
+  let timer = null;
+  let timeLimit = 120; // default 2 mins
+  let timeLeft = timeLimit;
+
+  modeSelect.addEventListener("change", () => {
+    mode = modeSelect.value;
+    if (mode === "timeAttack") {
+      timerDisplay.style.display = "inline-block";
+      timerSelect.style.display = "inline-block";
+      timerLabel.style.display = "inline-block";
+    } else {
+      timerDisplay.style.display = "none";
+      timerSelect.style.display = "none";
+      timerLabel.style.display = "none";
+      stopTimer();
+    }
+    resetGame();
+  });
+
+  timerSelect.addEventListener("change", () => {
+    if (mode === "timeAttack") {
+      resetGame();
+    }
+  });
+
+  function startTimer() {
+    stopTimer();
+    timeLeft = timeLimit;
+    updateTimerDisplay();
+    timer = setInterval(() => {
+      timeLeft--;
+      updateTimerDisplay();
+      if (timeLeft <= 0) {
+        clearInterval(timer);
+        endGameDueToTime();
+      }
+    }, 1000);
   }
 
-  function bindUI(){
-    newBtn.addEventListener("click", ()=>{
-      const [c,r]=gridSelect.value.split("x").map(n=>parseInt(n,10));
-      cols=c; rows=r;
-      setupBoard(cols,rows);
-      current=0; playing=true; firstMove=[false,false];
-      updateStatus("New game.");
-    });
+  function stopTimer() {
+    if (timer) {
+      clearInterval(timer);
+      timer = null;
+    }
   }
 
-  // ---------- board ----------
-  function setupBoard(c,r){
-    board = Array.from({length:r},()=>Array.from({length:c},()=>({owner:-1,count:0})));
-    boardEl.style.gridTemplateColumns=`repeat(${c}, var(--cell))`;
-    boardEl.innerHTML="";
-    for(let y=0;y<r;y++){
-      for(let x=0;x<c;x++){
-        const cell=el("button","cell",{ "data-x":x, "data-y":y, "aria-label":`Cell ${x+1},${y+1}` });
-        cell.addEventListener("click", ()=>handleMove(x,y));
+  function updateTimerDisplay() {
+    timeLeftSpan.textContent = timeLeft;
+  }
+
+  function endGameDueToTime() {
+    playing = false;
+    updateStatus("Time's up! Game Over.");
+    alert("Time's up! Game Over.");
+  }
+
+  function setupBoard(c, r) {
+    board = Array.from({ length: r }, () =>
+      Array.from({ length: c }, () => ({ owner: -1, count: 0 }))
+    );
+    cols = c;
+    rows = r;
+    boardEl.style.gridTemplateColumns = `repeat(${c}, var(--cell))`;
+    boardEl.innerHTML = "";
+    for (let y = 0; y < r; y++) {
+      for (let x = 0; x < c; x++) {
+        const cell = el("button", "cell", {
+          "data-x": x,
+          "data-y": y,
+          "aria-label": `Cell ${x + 1},${y + 1}`,
+        });
+        cell.addEventListener("click", () => handleMove(x, y));
         boardEl.appendChild(cell);
       }
     }
     paintAll();
   }
 
-  function capacity(x,y){
-    const onTop=y===0,onBottom=y===rows-1,onLeft=x===0,onRight=x===cols-1;
-    const edges=[onTop,onBottom,onLeft,onRight].filter(Boolean).length;
-    return edges===2?2:edges===1?3:4;
+  function capacity(x, y) {
+    const edges = [y == 0, y == rows - 1, x == 0, x == cols - 1].filter(Boolean).length;
+    return edges === 2 ? 2 : edges === 1 ? 3 : 4;
   }
 
-  function neighbors(x,y){
-    const n=[]; if(x>0)n.push([x-1,y]); if(x<cols-1)n.push([x+1,y]); if(y>0)n.push([x,y-1]); if(y<rows-1)n.push([x,y+1]); return n;
+  function neighbors(x, y) {
+    const n = [];
+    if (x > 0) n.push([x - 1, y]);
+    if (x < cols - 1) n.push([x + 1, y]);
+    if (y > 0) n.push([x, y - 1]);
+    if (y < rows - 1) n.push([x, y + 1]);
+    return n;
   }
 
-  // ---------- SVG bomb ----------
-  function makeBombSVG(color){
+  function makeBombSVG(color) {
     const ns = "http://www.w3.org/2000/svg";
     const svg = document.createElementNS(ns, "svg");
     svg.setAttribute("viewBox", "0 0 64 64");
     svg.classList.add("bombsvg");
-    svg.style.color = color;
+    svg.style.display = "block";
+    svg.style.margin = "0 auto";
 
-    // body + neck
     const body = document.createElementNS(ns, "circle");
-    body.setAttribute("cx","34"); body.setAttribute("cy","38"); body.setAttribute("r","18"); body.setAttribute("class","body");
-    const neck = document.createElementNS(ns, "rect");
-    neck.setAttribute("x","25"); neck.setAttribute("y","16"); neck.setAttribute("width","18"); neck.setAttribute("height","8");
-    neck.setAttribute("rx","3"); neck.setAttribute("class","neck");
+    body.setAttribute("cx", "32");
+    body.setAttribute("cy", "36");
+    body.setAttribute("r", "16");
+    body.setAttribute("fill", color);
+    body.setAttribute("filter", `drop-shadow(0 0 14px ${color})`);
+    svg.appendChild(body);
 
-    // subtle highlight
     const shine = document.createElementNS(ns, "circle");
-    shine.setAttribute("cx","26"); shine.setAttribute("cy","32"); shine.setAttribute("r","8"); shine.setAttribute("class","shine");
+    shine.setAttribute("cx", "26");
+    shine.setAttribute("cy", "30");
+    shine.setAttribute("r", "6");
+    shine.setAttribute("fill", "#fff");
+    shine.setAttribute("opacity", ".22");
+    svg.appendChild(shine);
 
-    // fuse shadow (behind) + rope
-    const fuseShadow = document.createElementNS(ns, "path");
-    fuseShadow.setAttribute("d","M44 18 C54 8, 63 14, 58 22");
-    fuseShadow.setAttribute("class","fuseShadow");
-    const fuse = document.createElementNS(ns, "path");
-    fuse.setAttribute("d","M44 18 C54 8, 62 15, 57 22");
-    fuse.setAttribute("class","fuse");
+    const fuse = document.createElementNS(ns, "rect");
+    fuse.setAttribute("x", "29");
+    fuse.setAttribute("y", "16");
+    fuse.setAttribute("width", "6");
+    fuse.setAttribute("height", "8");
+    fuse.setAttribute("rx", "2");
+    fuse.setAttribute("fill", "#c9a777");
+    svg.appendChild(fuse);
 
-    // spark group (yellow core + player-colored petals)
-    const g = document.createElementNS(ns, "g");
-    g.setAttribute("class","spark");
-    const base = document.createElementNS(ns, "circle");
-    base.setAttribute("cx","57"); base.setAttribute("cy","22"); base.setAttribute("r","5"); base.setAttribute("class","sparkBase");
-    g.appendChild(base);
-    for (let i=0;i<8;i++){
-      const p = document.createElementNS(ns, "rect");
-      p.setAttribute("x","56.5"); p.setAttribute("y","10");
-      p.setAttribute("width","3"); p.setAttribute("height","8");
-      p.setAttribute("rx","1.5");
-      p.setAttribute("class","sparkTint");
-      p.setAttribute("transform",`rotate(${i*45} 57 22) translate(0,-7)`);
-      g.appendChild(p);
-    }
+    const spark = document.createElementNS(ns, "circle");
+    spark.setAttribute("cx", "32");
+    spark.setAttribute("cy", "16");
+    spark.setAttribute("r", "4");
+    spark.setAttribute("fill", "#ffd54a");
+    spark.setAttribute("filter", "drop-shadow(0 0 8px #ffd54a)");
+    svg.appendChild(spark);
 
-    svg.append(body, neck, shine, fuseShadow, fuse, g);
     return svg;
   }
 
-  // ---------- moves ----------
-  function handleMove(x,y){
-    if(!playing) return;
-    const cell=board[y][x];
-    if(cell.owner!==-1 && cell.owner!==current) return;   // only empty or own
-
-    // place
-    cell.owner=current; cell.count+=1;
-    drawCell(x,y);
-
-    resolveReactions().then(()=>{
-      firstMove[current]=true;
-
-      // win check AFTER both have played at least once
-      const counts = [0,0];
-      for(let yy=0; yy<rows; yy++) for(let xx=0; xx<cols; xx++){
-        const c=board[yy][xx]; if(c.owner!==-1) counts[c.owner]+=c.count;
-      }
-      const bothStarted = firstMove[0] && firstMove[1];
-      if(bothStarted){
-        const alive = [0,1].filter(p => counts[p]>0);
-        if(alive.length===1){
-          playing=false;
-          updateStatus(`Player ${alive[0]+1} wins! 🏆`);
-          return;
-        }
-      }
-
-      // next turn
-      current = (current+1)%2;
-      updateStatus();
-      paintAll();
-    });
+  function init() {
+    bindUI();
+    buildPlayerSettings(parseInt(playerCountSelect.value, 10));
   }
 
-  async function resolveReactions(){
-    // queue any overfull cells
-    const q=[];
-    for(let y=0;y<rows;y++) for(let x=0;x<cols;x++) if(board[y][x].count>=capacity(x,y)) q.push([x,y]);
-    if(!q.length) return;
+  function bindUI() {
+    newBtn.addEventListener("click", resetGame);
+    undoBtn.addEventListener("click", undoMove);
+    playerCountSelect.addEventListener("change", () =>
+      buildPlayerSettings(parseInt(playerCountSelect.value, 10))
+    );
+    gridSelect.addEventListener("change", resetGame);
+  }
 
-    const sleep=ms=>new Promise(r=>setTimeout(r,ms));
-    while(q.length){
-      // unique wave
-      const wave=[...new Set(q.map(([x,y])=>`${x},${y}`))].map(s=>s.split(",").map(n=>parseInt(n,10)));
-      q.length=0;
+  function buildPlayerSettings(count) {
+    playerSettingsContainer.innerHTML = "";
+    players = [];
+    scores = new Array(count).fill(0);
+    for (let i = 0; i < count; i++) {
+      const div = el("div", "player-setting");
+      const labelName = el("label", "");
+      labelName.textContent = `Player ${i + 1} Name: `;
+      const nameInput = el("input", "", { type: "text", placeholder: `Player ${i + 1}` });
+      labelName.appendChild(nameInput);
+      const labelP = el("label", "");
+      labelP.textContent = `Player ${i + 1} Color: `;
+      const colorInput = el("input", "", { type: "color", value: defaultColors[i] });
+      labelP.appendChild(colorInput);
+      div.append(labelName, labelP);
+      playerSettingsContainer.appendChild(div);
+      players.push({ name: "", color: colorInput.value });
+      nameInput.addEventListener("input", (e) => {
+        players[i].name = e.target.value.trim() || `Player ${i + 1}`;
+        updateStatus();
+        renderScores();
+      });
+      colorInput.addEventListener("input", (e) => {
+        players[i].color = e.target.value;
+        paintAll();
+        renderScores();
+      });
+    }
+    resetGame();
+  }
 
-      const toInc=[];
-      for(const [x,y] of wave){
-        const cap=capacity(x,y); const cell=board[y][x];
-        if(cell.count<cap) continue;
-        cell.count-=cap; if(cell.count===0) cell.owner=-1;
-        // send to neighbors as current player's orbs
-        for(const [nx,ny] of neighbors(x,y)){
-          const nc=board[ny][nx]; nc.owner=current; nc.count+=1;
-          if(nc.count>=capacity(nx,ny)) toInc.push([nx,ny]);
-        }
-      }
-      paintAll();
-      for(const p of toInc) q.push(p);
-      await sleep(150);
+  function resetGame() {
+    const [c, r] = gridSelect.value.split("x").map(Number);
+    cols = c;
+    rows = r;
+    current = 0;
+    playing = true;
+    firstMove = players.map(() => false);
+    history = [];
+    setupBoard(cols, rows);
+    updateStatus(`Player ${current + 1}'s turn`);
+    updateScores();
+    if (mode === "timeAttack") {
+      timeLimit = parseInt(timerSelect.value, 10);
+      startTimer();
+    } else {
+      stopTimer();
     }
   }
 
-  // ---------- rendering ----------
-  function paintAll(){
-    // board glow & per-cell pulse color
-    const glow=COLORS[current];
-    document.documentElement.style.setProperty("--glow", glow);
-    for(let y=0;y<rows;y++) for(let x=0;x<cols;x++) drawCell(x,y,true);
+  function advanceTurn() {
+    current = (current + 1) % players.length;
+    updateStatus();
+    paintAll();
   }
 
-  function drawCell(x,y,withPulse=false){
-    const idx=y*cols+x; const cellEl=boardEl.children[idx]; const data=board[y][x];
-    cellEl.innerHTML=""; cellEl.classList.toggle("owned", data.owner!==-1);
+  function handleMove(x, y) {
+    if (!playing) return;
+    const cell = board[y][x];
+    if (cell.owner !== -1 && cell.owner !== current) return;
+    makeMove(x, y);
+  }
 
-    // pulse all cells in the current player's glow
-    if(withPulse){ cellEl.classList.add("pulse"); cellEl.style.setProperty("--glow", COLORS[current]); }
+  async function makeMove(x, y) {
+    history.push(JSON.stringify({ board, current, playing, firstMove: [...firstMove], scores: [...scores] }));
+    const cell = board[y][x];
+    cell.owner = current;
+    cell.count += 1;
+    drawCell(x, y);
+    await resolveReactions();
+    updateScores();
+    firstMove[current] = true;
+    checkWin();
+    if (playing) advanceTurn();
+  }
 
-    if(data.count===0) return;
+  async function resolveReactions() {
+    const q = [];
+    for (let y = 0; y < rows; y++)
+      for (let x = 0; x < cols; x++)
+        if (board[y][x].count >= capacity(x, y)) q.push([x, y]);
+    if (!q.length) return;
+    const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+    while (q.length) {
+      const wave = [...new Set(q.map(([x, y]) => `${x},${y}`))]
+        .map((s) => s.split(",").map(Number));
+      q.length = 0;
+      const toInc = [];
+      for (const [x, y] of wave) {
+        const cap = capacity(x, y);
+        const cell = board[y][x];
+        if (cell.count < cap) continue;
+        cell.count -= cap;
+        if (cell.count === 0) cell.owner = -1;
+        for (const [nx, ny] of neighbors(x, y)) {
+          const nc = board[ny][nx];
+          nc.owner = current;
+          nc.count += 1;
+          if (nc.count >= capacity(nx, ny)) toInc.push([nx, ny]);
+        }
+      }
+      paintAll();
+      for (const p of toInc) q.push(p);
+      await sleep(120);
+    }
+  }
 
-    const color = COLORS[data.owner];
-    if(data.count===1){
-      const o=el("div","orb one"); o.style.color=color; o.style.background=color; cellEl.appendChild(o);
-    }else if(data.count===2){
-      const wrap=el("div","pair"); wrap.style.color=color;
-      wrap.appendChild(el("i","a")); wrap.appendChild(el("i","b"));
+  function updateScores() {
+    scores = players.map(() => 0);
+    for (let y = 0; y < rows; y++) {
+      for (let x = 0; x < cols; x++) {
+        const owner = board[y][x].owner;
+        if (owner !== -1) {
+          scores[owner] += board[y][x].count;
+        }
+      }
+    }
+    renderScores();
+  }
+
+  function renderScores() {
+    scoreDisplay.innerHTML = players
+      .map((p, i) =>
+        `<span style="color: ${p.color}; font-weight:700; margin-right: 12px;">${p.name || 'Player ' + (i + 1)}: ${scores[i]}</span>`
+      )
+      .join("");
+  }
+
+  function paintAll() {
+    document.documentElement.style.setProperty("--glow", players[current].color);
+    for (let y = 0; y < rows; y++)
+      for (let x = 0; x < cols; x++)
+        drawCell(x, y, true);
+  }
+
+  function drawCell(x, y, withPulse = false) {
+    const idx = y * cols + x;
+    const cellEl = boardEl.children[idx];
+    const data = board[y][x];
+    cellEl.innerHTML = "";
+    cellEl.classList.toggle("owned", data.owner !== -1);
+    if (withPulse) {
+      cellEl.classList.add("pulse");
+      cellEl.style.setProperty("--glow", players[current].color);
+    }
+    if (data.count === 0) return;
+    const color = players[data.owner]?.color || "#ccc";
+    if (data.count === 1) {
+      const o = el("div", "orb one");
+      o.style.background = color;
+      o.style.color = color;
+      cellEl.appendChild(o);
+    } else if (data.count === 2) {
+      const wrap = el("div", "pair-improved");
+      const orbA = el("div", "orb two-orb");
+      const orbB = el("div", "orb two-orb");
+      orbA.style.background = color;
+      orbB.style.background = color;
+      wrap.appendChild(orbA);
+      wrap.appendChild(orbB);
       cellEl.appendChild(wrap);
-    }else{ // 3 or more -> SVG bomb with fuse + spark
+    } else {
       cellEl.appendChild(makeBombSVG(color));
     }
   }
 
-  // ---------- UI text ----------
-  function updateStatus(extra){
-    const color=COLORS[current];
-    turnBadge.style.background=color;
-    statusText.textContent = extra || `Player ${current+1}'s turn`;
+  function updateStatus(extra) {
+    const playerName = players[current]?.name || `Player ${current + 1}`;
+    statusText.textContent = extra || `${playerName}'s turn`;
+    turnBadge.style.background = players[current].color;
   }
 
-  // go
+  function undoMove() {
+    if (!history.length) return;
+    const prev = JSON.parse(history.pop());
+    board = prev.board;
+    current = prev.current;
+    playing = prev.playing;
+    firstMove = prev.firstMove;
+    scores = prev.scores || scores;
+    paintAll();
+    updateStatus();
+    renderScores();
+  }
+
+  function checkWin() {
+    const counts = players.map(() => 0);
+    for (let y = 0; y < rows; y++)
+      for (let x = 0; x < cols; x++) {
+        const o = board[y][x].owner;
+        if (o !== -1) counts[o] += board[y][x].count;
+      }
+    if (firstMove.every(Boolean)) {
+      const alivePlayers = counts
+        .map((c, i) => ({ count: c, idx: i }))
+        .filter((p) => p.count > 0);
+      if (alivePlayers.length === 1) {
+        playing = false;
+        const winnerName =
+          players[alivePlayers[0].idx].name?.trim() || `Player ${alivePlayers[0].idx + 1}`;
+        updateStatus(`${winnerName} wins! 🏆`);
+        return true;
+      }
+    }
+    return false;
+  }
+
   init();
 })();
